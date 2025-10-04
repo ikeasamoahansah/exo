@@ -13,7 +13,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
-model = pickle.load(open('model/xgb_model_top_8_mi.pkl', 'rb'))
+model = pickle.load(open('model/xgb_model_top8_mi.pkl', 'rb'))
 
 class PredictionInput(BaseModel):
     koi_model_snr: float = Field(..., description="Transit signal-to-noise ratio")
