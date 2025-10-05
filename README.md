@@ -92,5 +92,4 @@ MIT License
 
 **Author:** ~ike
 
-For questions or contributions, open an issue or pull request on [GitHub](https://github.com/ikeasamoahansah/exo).
-````
+For questions or contributions, open an issue or pull request on [GitHub](https://github.com/ikeasamoahansah/exo)
