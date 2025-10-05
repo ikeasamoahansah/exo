@@ -150,10 +150,30 @@
             transition: all 0.3s ease;
         }
 
-        input[type="number"]:focus, input[type="file"]:focus {
+        input[type="number"]:focus, input[type="file"]:focus, select:focus {
             outline: none;
             border-color: #667eea;
             box-shadow: 0 0 20px rgba(102, 126, 234, 0.3);
+        }
+
+        select {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+            color: #fff;
+            padding: 12px 15px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        select option {
+            background: #302b63;
+            color: #fff;
+        }
+
+        select:hover {
+            border-color: rgba(255, 255, 255, 0.4);
         }
 
         input::placeholder {
@@ -373,6 +393,18 @@
         <div id="manual-tab" class="tab-content active">
             <div class="card">
                 <form id="prediction-form">
+                    <div class="form-group" style="margin-bottom: 30px;">
+                        <label>Select Model <span class="info-tooltip" title="Choose which ML model to use for prediction">?</span></label>
+                        <select id="model-select" name="model" style="padding: 12px 15px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 10px; color: #fff; font-size: 1rem; width: 100%; cursor: pointer; transition: all 0.3s ease;">
+                            <!-- <option value="random_forest">Random Forest</option> -->
+                            <option value="xgboost">XGBoost</option>
+                            <option value="ensemble">XGB + RF</option>
+                            <!-- <option value="logistic_regression">Logistic Regression</option>
+                            <option value="svm">Support Vector Machine</option>
+                            <option value="neural_network">Neural Network</option>
+                            <option value="gradient_boosting">Gradient Boosting</option> -->
+                        </select>
+                    </div>
                     <div class="form-grid">
                         <div class="form-group">
                             <label>Signal-to-Noise Ratio <span class="info-tooltip" title="Transit signal-to-noise ratio">?</span></label>
@@ -417,6 +449,18 @@
 
         <div id="batch-tab" class="tab-content">
             <div class="card">
+                <div class="form-group" style="margin-bottom: 30px;">
+                    <label>Select Model <span class="info-tooltip" title="Choose which ML model to use for batch predictions">?</span></label>
+                    <select id="batch-model-select" name="model" style="padding: 12px 15px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 10px; color: #fff; font-size: 1rem; width: 100%; cursor: pointer; transition: all 0.3s ease;">
+                        <!-- <option value="random_forest">Random Forest</option> -->
+                        <option value="xgboost">XGBoost</option>
+                        <option value="ensemble">XGB + RF</option>
+                        <!-- <option value="logistic_regression">Logistic Regression</option>
+                        <option value="svm">Support Vector Machine</option>
+                        <option value="neural_network">Neural Network</option>
+                        <option value="gradient_boosting">Gradient Boosting</option> -->
+                    </select>
+                </div>
                 <div class="upload-area" onclick="document.getElementById('csv-file').click()">
                     <div class="upload-icon">📁</div>
                     <h3>Upload CSV File</h3>
@@ -465,13 +509,17 @@
             const formData = new FormData(e.target);
             const data = Object.fromEntries(formData);
             
+            // Extract model selection
+            const selectedModel = data.model;
+            delete data.model;
+            
             // Convert to numbers
             Object.keys(data).forEach(key => {
                 data[key] = parseFloat(data[key]);
             });
 
             try {
-                const response = await fetch(`${API_URL}/predict`, {
+                const response = await fetch(`${API_URL}/predict?model=${selectedModel}`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -480,7 +528,7 @@
                 });
 
                 const result = await response.json();
-                displayResult(result);
+                displayResult(result, selectedModel);
             } catch (error) {
                 document.getElementById('result-container').innerHTML = `
                     <div class="error">
@@ -494,7 +542,7 @@
             }
         });
 
-        function displayResult(result) {
+        function displayResult(result, modelName) {
             let badgeClass, statusText;
             
             if (result.prediction === 1) {
@@ -508,9 +556,15 @@
                 statusText = 'False Positive';
             }
             
+            const modelDisplay = modelName ? modelName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : 'N/A';
+            
             const html = `
                 <div class="result">
                     <h3>Prediction Results</h3>
+                    <div class="result-item">
+                        <span class="result-label">Model Used:</span>
+                        <span class="result-value">${modelDisplay}</span>
+                    </div>
                     <div class="result-item">
                         <span class="result-label">Classification:</span>
                         <span class="badge ${badgeClass}">${result.classification}</span>
@@ -612,11 +666,12 @@
             btn.disabled = true;
             btn.innerHTML = '<span class="loading"></span>Processing...';
 
+            const selectedModel = document.getElementById('batch-model-select').value;
             const formData = new FormData();
             formData.append('file', selectedFile);
 
             try {
-                const response = await fetch(`${API_URL}/predict/batch`, {
+                const response = await fetch(`${API_URL}/predict/batch?model=${selectedModel}`, {
                     method: 'POST',
                     body: formData
                 });
@@ -626,16 +681,17 @@
                     const url = window.URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = `predictions_${selectedFile.name}`;
+                    a.download = `predictions_${selectedModel}_${selectedFile.name}`;
                     document.body.appendChild(a);
                     a.click();
                     window.URL.revokeObjectURL(url);
                     document.body.removeChild(a);
 
+                    const modelDisplay = selectedModel.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
                     document.getElementById('batch-result-container').innerHTML = `
                         <div class="result">
                             <h3>✅ Success!</h3>
-                            <p>Your predictions have been downloaded.</p>
+                            <p>Your predictions using <strong>${modelDisplay}</strong> have been downloaded.</p>
                         </div>
                     `;
                 } else {

@@ -1,12 +1,14 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Optional
 import pandas as pd
 import io
 import pickle
+import joblib
 import numpy as np
+from enum import Enum
 
 app = FastAPI(
     title="Exoplanet Prediction API",
@@ -14,6 +16,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # In production, replace with specific origins
@@ -22,7 +25,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-model = pickle.load(open('model/xgb_model_top8_mi.pkl', 'rb'))
+# Define available models
+class ModelType(str, Enum):
+    random_forest = "random_forest"
+    xgboost = "xgboost"
+    ensemble = "ensemble"
+    # logistic_regression = "logistic_regression"
+    # svm = "svm"
+    # neural_network = "neural_network"
+    # gradient_boosting = "gradient_boosting"
+
+# Dictionary to store loaded models
+models = {}
+
+def load_models():
+    """Load all available models on startup"""
+    # models['random_forest'] = pickle.load(open('models/xgb_rf.pkl', 'rb'))
+    models['xgboost'] = joblib.load('models/xgboost.pkl')
+    models['ensemble'] = joblib.load('models/xgb_rf.pkl')
+    # models['logistic_regression'] = pickle.load(open('models/logistic_regression.pkl', 'rb'))
+    # models['svm'] = pickle.load(open('models/svm.pkl', 'rb'))
+    # models['neural_network'] = pickle.load(open('models/neural_network.pkl', 'rb'))
+    # models['gradient_boosting'] = pickle.load(open('models/gradient_boosting.pkl', 'rb'))
+
+# Load models when app starts
+@app.on_event("startup")
+async def startup_event():
+    load_models()
+    print("Models loaded successfully")
 
 class PredictionInput(BaseModel):
     koi_model_snr: float = Field(..., description="Transit signal-to-noise ratio")
@@ -65,14 +95,23 @@ def prepare_features(data: dict) -> np.ndarray:
     ]
     return np.array([[data[f] for f in feature_order]])
 
-def make_prediction(features: np.ndarray):
-    """Make prediction using the loaded model"""
-    # Uncomment when model is loaded
-    prediction = model.predict(features)[0]
-    probability = model.predict_proba(features)[0][1]
+def preprocess(data):
+    for col in data.columns:
+        if data[col].isnull().sum() > 0 and data[col].dtype != 'O':
+            data.fillna({col: data[col].fillna(0)}, inplace=True)
+    return data
+
+def make_prediction(features: np.ndarray, model_name: str):
+    """Make prediction using the selected model"""
+    if model_name in models:
+        model = models[model_name]
+        prediction = model.predict(features)[0]
+        probability = model.predict_proba(features)[0][1] if hasattr(model, 'predict_proba') else 0.5
+    else:
+        raise HTTPException(status_code=400, detail=f"Model {model_name} not found")
     
-    # Placeholder for demonstration
-    prediction = np.random.choice([0, 1])
+    # Placeholder for demonstration - replace with actual model prediction
+    prediction = np.random.choice([0, 1, 2])  # 0=false positive, 1=confirmed, 2=candidate
     probability = np.random.random()
     
     return prediction, probability
@@ -81,29 +120,46 @@ def make_prediction(features: np.ndarray):
 def read_root():
     return {
         "message": "Exoplanet Prediction API",
+        "available_models": [model.value for model in ModelType],
         "endpoints": {
             "/predict": "Single prediction (POST)",
             "/predict/batch": "Batch prediction from CSV (POST)",
+            "/models": "List available models (GET)",
             "/health": "Health check (GET)",
             "/docs": "API documentation"
         }
     }
 
+@app.get("/models")
+def list_models():
+    """List all available models"""
+    return {
+        "available_models": [model.value for model in ModelType],
+        "loaded_models": list(models.keys()) if models else []
+    }
+
 @app.get("/health")
 def health_check():
-    return {"status": "healthy", "model_loaded": True}
+    return {
+        "status": "healthy", 
+        "models_loaded": len(models),
+        "available_models": [model.value for model in ModelType]
+    }
 
 @app.post("/predict", response_model=PredictionOutput)
-def predict_single(input_data: PredictionInput):
+def predict_single(
+    input_data: PredictionInput,
+    model: ModelType = Query(ModelType.ensemble, description="Model to use for prediction")
+):
     """
-    Make a single prediction for exoplanet classification
+    Make a single prediction for exoplanet classification using the specified model
     """
     try:
         features = prepare_features(input_data.dict())
-        prediction, probability = make_prediction(features)
+        prediction, probability = make_prediction(features, model.value)
         
         if prediction == 1:
-            classification = "Exoplanet Confirmed"
+            classification = "Confirmed Exoplanet"
         elif prediction == 2:
             classification = "Exoplanet Candidate"
         else:
@@ -118,9 +174,12 @@ def predict_single(input_data: PredictionInput):
         raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
 
 @app.post("/predict/batch")
-async def predict_batch(file: UploadFile = File(...)):
+async def predict_batch(
+    file: UploadFile = File(...),
+    model: ModelType = Query(ModelType.ensemble, description="Model to use for predictions")
+):
     """
-    Make batch predictions from CSV file
+    Make batch predictions from CSV file using the specified model
     Returns a CSV file with predictions
     """
     if not file.filename.endswith('.csv'):
@@ -143,21 +202,24 @@ async def predict_batch(file: UploadFile = File(...)):
                 detail=f"Missing required columns: {missing_cols}"
             )
         
+        cleaned_df = preprocess(df)
+
         # Make predictions
         predictions = []
         probabilities = []
         
-        for _, row in df.iterrows():
+        for _, row in cleaned_df.iterrows():
             features = prepare_features(row[required_cols].to_dict())
-            pred, prob = make_prediction(features)
+            pred, prob = make_prediction(features, model.value)
             predictions.append(pred)
             probabilities.append(prob)
         
         # Add predictions to dataframe
-        df['prediction'] = predictions
-        df['probability'] = probabilities
-        df['classification'] = df['prediction'].map({
-            1: 'Exoplanet Candidate',
+        cleaned_df['prediction'] = predictions
+        cleaned_df['probability'] = probabilities
+        cleaned_df['classification'] = cleaned_df['prediction'].map({
+            1: 'Confirmed Exoplanet',
+            2: 'Exoplanet Candidate',
             0: 'False Positive'
         })
         
@@ -169,7 +231,7 @@ async def predict_batch(file: UploadFile = File(...)):
         return StreamingResponse(
             iter([output.getvalue()]),
             media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=predictions_{file.filename}"}
+            headers={"Content-Disposition": f"attachment; filename=predictions_{model.value}_{file.filename}"}
         )
         
     except pd.errors.EmptyDataError:
@@ -178,9 +240,12 @@ async def predict_batch(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
 
 @app.post("/predict/batch/json", response_model=BatchPredictionOutput)
-async def predict_batch_json(file: UploadFile = File(...)):
+async def predict_batch_json(
+    file: UploadFile = File(...),
+    model: ModelType = Query(ModelType.ensemble, description="Model to use for predictions")
+):
     """
-    Make batch predictions from CSV file
+    Make batch predictions from CSV file using the specified model
     Returns JSON response with predictions
     """
     if not file.filename.endswith('.csv'):
@@ -189,7 +254,9 @@ async def predict_batch_json(file: UploadFile = File(...)):
     try:
         contents = await file.read()
         df = pd.read_csv(io.BytesIO(contents))
-        
+
+        print("file received and read")
+
         required_cols = [
             'koi_model_snr', 'koi_prad', 'koi_fpflag_ss', 'koi_fpflag_co',
             'koi_period', 'koi_depth', 'koi_fpflag_nt', 'koi_insol'
@@ -201,13 +268,17 @@ async def predict_batch_json(file: UploadFile = File(...)):
                 detail=f"Missing required columns: {missing_cols}"
             )
         
-        results = []
-        for idx, row in df.iterrows():
-            features = prepare_features(row[required_cols].to_dict())
-            pred, prob = make_prediction(features)
+        cleaned_df = preprocess(df)
 
+        print("data cleaned")
+
+        results = []
+        for idx, row in cleaned_df.iterrows():
+            features = prepare_features(row[required_cols].to_dict())
+            pred, prob = make_prediction(features, model.value)
+            
             if pred == 1:
-                classification = "Exoplanet Confirmed"
+                classification = "Confirmed Exoplanet"
             elif pred == 2:
                 classification = "Exoplanet Candidate"
             else:
