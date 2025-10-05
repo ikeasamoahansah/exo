@@ -1,5 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import List
 import pandas as pd
@@ -11,6 +12,14 @@ app = FastAPI(
     title="Exoplanet Prediction API",
     description="API for predicting exoplanet candidates using KOI features",
     version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with specific origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 model = pickle.load(open('model/xgb_model_top8_mi.pkl', 'rb'))
@@ -59,8 +68,8 @@ def prepare_features(data: dict) -> np.ndarray:
 def make_prediction(features: np.ndarray):
     """Make prediction using the loaded model"""
     # Uncomment when model is loaded
-    # prediction = model.predict(features)[0]
-    # probability = model.predict_proba(features)[0][1]
+    prediction = model.predict(features)[0]
+    probability = model.predict_proba(features)[0][1]
     
     # Placeholder for demonstration
     prediction = np.random.choice([0, 1])
@@ -93,7 +102,12 @@ def predict_single(input_data: PredictionInput):
         features = prepare_features(input_data.dict())
         prediction, probability = make_prediction(features)
         
-        classification = "Exoplanet Candidate" if prediction == 1 else "False Positive"
+        if prediction == 1:
+            classification = "Exoplanet Confirmed"
+        elif prediction == 2:
+            classification = "Exoplanet Candidate"
+        else:
+            classification = "False Positive"
         
         return PredictionOutput(
             prediction=int(prediction),
@@ -191,12 +205,19 @@ async def predict_batch_json(file: UploadFile = File(...)):
         for idx, row in df.iterrows():
             features = prepare_features(row[required_cols].to_dict())
             pred, prob = make_prediction(features)
+
+            if pred == 1:
+                classification = "Exoplanet Confirmed"
+            elif pred == 2:
+                classification = "Exoplanet Candidate"
+            else:
+                classification = "False Positive"
             
             results.append({
                 "row_index": int(idx),
                 "prediction": int(pred),
                 "probability": float(prob),
-                "classification": "Exoplanet Candidate" if pred == 1 else "False Positive"
+                "classification": classification
             })
         
         return BatchPredictionOutput(

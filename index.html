@@ -305,10 +305,59 @@
             font-size: 0.7rem;
             cursor: help;
         }
+
+        .fireworks-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 9999;
+        }
+
+        .firework {
+            position: absolute;
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            animation: firework-launch 1s ease-out forwards;
+        }
+
+        @keyframes firework-launch {
+            0% {
+                transform: translateY(0);
+                opacity: 1;
+            }
+            100% {
+                transform: translateY(-400px);
+                opacity: 0;
+            }
+        }
+
+        .particle {
+            position: absolute;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            animation: particle-explode 1s ease-out forwards;
+        }
+
+        @keyframes particle-explode {
+            0% {
+                transform: translate(0, 0) scale(1);
+                opacity: 1;
+            }
+            100% {
+                opacity: 0;
+                transform: scale(0);
+            }
+        }
     </style>
 </head>
 <body>
     <div class="stars" id="stars"></div>
+    <div class="fireworks-container" id="fireworks"></div>
     
     <div class="container">
         <div class="header">
@@ -446,7 +495,19 @@
         });
 
         function displayResult(result) {
-            const badgeClass = result.prediction === 1 ? 'positive' : 'negative';
+            let badgeClass, statusText;
+            
+            if (result.prediction === 1) {
+                badgeClass = 'positive';
+                statusText = 'Confirmed Exoplanet';
+            } else if (result.prediction === 2) {
+                badgeClass = 'positive';
+                statusText = 'Exoplanet Candidate';
+            } else {
+                badgeClass = 'negative';
+                statusText = 'False Positive';
+            }
+            
             const html = `
                 <div class="result">
                     <h3>Prediction Results</h3>
@@ -459,12 +520,79 @@
                         <span class="result-value">${(result.probability * 100).toFixed(2)}%</span>
                     </div>
                     <div class="result-item">
-                        <span class="result-label">Prediction:</span>
-                        <span class="result-value">${result.prediction === 1 ? 'Confirmed Exoplanet' : 'False Positive'}</span>
+                        <span class="result-label">Status:</span>
+                        <span class="result-value">${statusText}</span>
                     </div>
                 </div>
             `;
             document.getElementById('result-container').innerHTML = html;
+            
+            // Launch fireworks if exoplanet is confirmed!
+            if (result.prediction === 1) {
+                launchFireworks();
+            }
+        }
+
+        function launchFireworks() {
+            const container = document.getElementById('fireworks');
+            const colors = ['#ff0844', '#ffb199', '#ffd23f', '#00d9ff', '#7b5cff', '#ff006e', '#8338ec', '#3a86ff'];
+            
+            // Launch 15 fireworks over 3 seconds
+            for (let i = 0; i < 15; i++) {
+                setTimeout(() => {
+                    createFirework(container, colors);
+                }, i * 200);
+            }
+        }
+
+        function createFirework(container, colors) {
+            const startX = Math.random() * window.innerWidth;
+            const startY = window.innerHeight;
+            const endX = startX;
+            const endY = Math.random() * (window.innerHeight * 0.5) + 100;
+            
+            const color = colors[Math.floor(Math.random() * colors.length)];
+            
+            // Create launch trail
+            const firework = document.createElement('div');
+            firework.className = 'firework';
+            firework.style.left = startX + 'px';
+            firework.style.top = startY + 'px';
+            firework.style.backgroundColor = color;
+            container.appendChild(firework);
+            
+            // Explode after launch
+            setTimeout(() => {
+                explode(container, endX, endY, color);
+                firework.remove();
+            }, 1000);
+        }
+
+        function explode(container, x, y, color) {
+            const particleCount = 50;
+            
+            for (let i = 0; i < particleCount; i++) {
+                const particle = document.createElement('div');
+                particle.className = 'particle';
+                particle.style.left = x + 'px';
+                particle.style.top = y + 'px';
+                particle.style.backgroundColor = color;
+                
+                const angle = (Math.PI * 2 * i) / particleCount;
+                const velocity = 100 + Math.random() * 100;
+                const tx = Math.cos(angle) * velocity;
+                const ty = Math.sin(angle) * velocity;
+                
+                particle.style.setProperty('--tx', tx + 'px');
+                particle.style.setProperty('--ty', ty + 'px');
+                
+                particle.style.animation = `particle-explode ${0.8 + Math.random() * 0.4}s ease-out forwards`;
+                particle.style.transform = `translate(${tx}px, ${ty}px)`;
+                
+                container.appendChild(particle);
+                
+                setTimeout(() => particle.remove(), 1500);
+            }
         }
 
         let selectedFile = null;
