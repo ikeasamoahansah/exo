@@ -9,6 +9,7 @@ import pickle
 import joblib
 import numpy as np
 from enum import Enum
+import traceback
 
 app = FastAPI(
     title="Exoplanet Prediction API",
@@ -40,7 +41,7 @@ models = {}
 
 def load_models():
     """Load all available models on startup"""
-    # models['random_forest'] = pickle.load(open('models/xgb_rf.pkl', 'rb'))
+    models['random_forest'] = joblib.load('models/rf.pkl')
     models['xgboost'] = joblib.load('models/xgboost.pkl')
     models['ensemble'] = joblib.load('models/xgb_rf.pkl')
     # models['logistic_regression'] = pickle.load(open('models/logistic_regression.pkl', 'rb'))
@@ -95,11 +96,6 @@ def prepare_features(data: dict) -> np.ndarray:
     ]
     return np.array([[data[f] for f in feature_order]])
 
-def preprocess(data):
-    for col in data.columns:
-        if data[col].isnull().sum() > 0 and data[col].dtype != 'O':
-            data.fillna({col: data[col].fillna(0)}, inplace=True)
-    return data
 
 def make_prediction(features: np.ndarray, model_name: str):
     """Make prediction using the selected model"""
@@ -111,8 +107,8 @@ def make_prediction(features: np.ndarray, model_name: str):
         raise HTTPException(status_code=400, detail=f"Model {model_name} not found")
     
     # Placeholder for demonstration - replace with actual model prediction
-    prediction = np.random.choice([0, 1, 2])  # 0=false positive, 1=confirmed, 2=candidate
-    probability = np.random.random()
+    # prediction = np.random.choice([0, 1, 2])  # 0=false positive, 1=confirmed, 2=candidate
+    # probability = np.random.random()
     
     return prediction, probability
 
@@ -201,23 +197,35 @@ async def predict_batch(
                 status_code=400,
                 detail=f"Missing required columns: {missing_cols}"
             )
+
+        X = df[required_cols].copy()
+        X = X.fillna(X.median())
+
+        scaler = joblib.load('models/scaler.pkl')
         
-        cleaned_df = preprocess(df)
+        if scaler is not None:
+            X_scaled = scaler.transform(X.values)
+        else:
+            X_scaled = X.values
 
         # Make predictions
         predictions = []
         probabilities = []
         
-        for _, row in cleaned_df.iterrows():
-            features = prepare_features(row[required_cols].to_dict())
-            pred, prob = make_prediction(features, model.value)
-            predictions.append(pred)
-            probabilities.append(prob)
+        for idx in range(len(X_scaled)):
+            try:
+                features = X_scaled[idx:idx+1]
+                pred, prob = make_prediction(features, model.value)
+                predictions.append(pred)
+                probabilities.append(prob)
+            except Exception as e:
+                traceback.print_exc()
+                raise HTTPException(status_code=400, detail="Error predicting row")
         
         # Add predictions to dataframe
-        cleaned_df['prediction'] = predictions
-        cleaned_df['probability'] = probabilities
-        cleaned_df['classification'] = cleaned_df['prediction'].map({
+        df['prediction'] = predictions
+        df['probability'] = probabilities
+        df['classification'] = df['prediction'].map({
             1: 'Confirmed Exoplanet',
             2: 'Exoplanet Candidate',
             0: 'False Positive'
@@ -236,7 +244,11 @@ async def predict_batch(
         
     except pd.errors.EmptyDataError:
         raise HTTPException(status_code=400, detail="CSV file is empty")
+    except HTTPException:
+        raise
     except Exception as e:
+        print('Batch processing error')
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
 
 @app.post("/predict/batch/json", response_model=BatchPredictionOutput)
@@ -268,28 +280,45 @@ async def predict_batch_json(
                 detail=f"Missing required columns: {missing_cols}"
             )
         
-        cleaned_df = preprocess(df)
+        X = df[required_cols].copy()
+        X = X.fillna(X.median())
 
-        print("data cleaned")
+        scaler = joblib.load('models/scaler.pkl')
+        
+        if scaler is not None:
+            X_scaled = scaler.transform(X.values)
+        else:
+            X_scaled = X.values
+
 
         results = []
-        for idx, row in cleaned_df.iterrows():
-            features = prepare_features(row[required_cols].to_dict())
-            pred, prob = make_prediction(features, model.value)
+        for idx in range(len(X_scaled)):
+            try:
+                features = X_scaled[idx:idx+1]
+                pred, prob = make_prediction(features, model.value)
             
-            if pred == 1:
-                classification = "Confirmed Exoplanet"
-            elif pred == 2:
-                classification = "Exoplanet Candidate"
-            else:
-                classification = "False Positive"
+                if pred == 1:
+                    classification = "Confirmed Exoplanet"
+                elif pred == 2:
+                    classification = "Exoplanet Candidate"
+                else:
+                    classification = "False Positive"
             
-            results.append({
-                "row_index": int(idx),
-                "prediction": int(pred),
-                "probability": float(prob),
-                "classification": classification
-            })
+                results.append({
+                    "row_index": int(idx),
+                    "prediction": int(pred),
+                    "probability": float(prob),
+                    "classification": classification
+                })
+            except Exception as e:
+                print(f"Error predicting row {idx}: {e}")
+                results.append({
+                    "row_index": int(idx),
+                    "prediction": 0,
+                    "probability": 0.0,
+                    "classification": "Error",
+                    "model_used": model.value
+                })
         
         return BatchPredictionOutput(
             predictions=results,
